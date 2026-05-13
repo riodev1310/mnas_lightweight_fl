@@ -1,0 +1,71 @@
+experiment:
+  name: "mnas_lcsmc_federated"
+  mode: "homogeneous"
+  num_clients: 10
+  rounds: 100
+  seed: 42
+  device: "auto"
+
+data:
+  data_path: "./datasets/road_multi_label.csv"
+  use_all_data_for_training: true
+  num_workers: 4
+  pin_memory: true
+  max_samples:
+
+federated:
+  batch_size_policy:
+    10: 2048
+    20: 1024
+    50: 512
+  local_epochs_per_round: 1
+  aggregation: "fedavg"
+  eval_every_round: true
+  checkpoint_every_round: true
+  client_fraction: 1.0
+
+partition:
+  strategy: "dirichlet"
+  dirichlet_alpha: 0.5
+  min_client_samples: 1
+  partition_retry_attempts: 20
+  rebalance_tolerance_ratio: 0.05
+  required_min_coverage_ratio: 1.0
+
+model:
+  classifier: "LCSMCNet"
+  use_mnas_search: true
+  search_epochs: 1
+  search_lr_w: 0.001
+  search_lr_alpha: 0.001
+  search_temperature: 1.0
+  search_latency_lambda: 2.0
+  latency_budget_t0: 1.0
+  mnas_num_nodes: 5
+  mnas_topk_ops: 2
+  hidden_channels: 64
+  attention_reduction: 4
+
+training:
+  optimizer: "adam"
+  lr: 0.001
+  weight_decay: 0.0001
+  finetune_epochs: 1
+  distill_temperature: 2.0
+  distill_weight: 1.0
+
+evaluation:
+  threshold: 0.5
+  average_methods:
+    - "micro"
+    - "macro"
+    - "weighted"
+  save_confusion_matrix: true
+  save_classification_report: true
+
+outputs:
+  output_dir: "./outputs"
+  save_checkpoints: true
+  save_metrics: true
+  save_plots: true
+  overwrite_metrics: true

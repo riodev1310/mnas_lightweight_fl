@@ -1,0 +1,10 @@
+experiment:
+  mode: "homogeneous"
+  num_clients: 10
+  rounds: 100
+
+data:
+  data_path: "./datasets/road_multi_label.csv"
+
+outputs:
+  output_dir: "./outputs"
