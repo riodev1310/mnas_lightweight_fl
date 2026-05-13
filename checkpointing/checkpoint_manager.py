@@ -8,21 +8,11 @@ import torch
 from config.default_config import MNASConfig
 
 from .client_checkpoint import build_client_checkpoint
-from .server_checkpoint import build_server_checkpoint
 
 
 class CheckpointManager:
     def __init__(self, output_dir: str | Path) -> None:
         self.output_dir = Path(output_dir)
-
-    def server_checkpoint_path(self, mode: str, num_clients: int, round_idx: int) -> Path:
-        return (
-            self.output_dir
-            / "checkpoints"
-            / mode
-            / f"clients_{num_clients}"
-            / f"round_{round_idx:03d}_server.pt"
-        )
 
     def client_checkpoint_path(self, mode: str, num_clients: int, round_idx: int, client_id: int) -> Path:
         return (
@@ -33,28 +23,6 @@ class CheckpointManager:
             / f"round_{round_idx:03d}"
             / f"client_{client_id:03d}.pt"
         )
-
-    def save_server_checkpoint(
-        self,
-        *,
-        round_idx: int,
-        server: Any,
-        metrics: Any,
-        config: MNASConfig,
-        batch_size: int,
-    ) -> Path:
-        path = self.server_checkpoint_path(config.experiment.mode, config.experiment.num_clients, round_idx)
-        path.parent.mkdir(parents=True, exist_ok=True)
-        payload = build_server_checkpoint(
-            round_idx=round_idx,
-            num_clients=config.experiment.num_clients,
-            batch_size=batch_size,
-            server=server,
-            metrics=metrics,
-            config=config,
-        )
-        torch.save(payload, path)
-        return path
 
     def save_client_checkpoint(
         self,
@@ -82,9 +50,6 @@ class CheckpointManager:
         )
         torch.save(payload, path)
         return path
-
-    def load_server_checkpoint(self, mode: str, num_clients: int, round_idx: int, map_location: str = "cpu") -> dict[str, Any]:
-        return torch.load(self.server_checkpoint_path(mode, num_clients, round_idx), map_location=map_location)
 
     def load_client_checkpoint(
         self,

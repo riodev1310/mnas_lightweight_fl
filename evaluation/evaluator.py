@@ -1,6 +1,5 @@
 from __future__ import annotations
 
-from abc import ABC, abstractmethod
 from typing import Sequence
 
 import numpy as np
@@ -58,17 +57,8 @@ def evaluate_model(
     return compute_classification_metrics(y_true, y_pred, loss=loss, label_names=label_names)
 
 
-class EvaluationStrategy(ABC):
-    @abstractmethod
-    def evaluate_after_round(self, *args, **kwargs):
-        raise NotImplementedError
+class PaperFaithfulClientEvaluation:
+    """Evaluate personalized client models after server proxy aggregation."""
 
-
-class HomogeneousServerEvaluation(EvaluationStrategy):
-    def evaluate_after_round(self, server, round_idx: int) -> EvaluationResult:
-        return server.evaluate_global(round_idx)
-
-
-class HeterogeneousClientEvaluation(EvaluationStrategy):
     def evaluate_after_round(self, clients, round_idx: int) -> dict[int, EvaluationResult]:
         return {client.client_id: client.evaluate_local(round_idx) for client in clients}

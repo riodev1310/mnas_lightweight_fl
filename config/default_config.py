@@ -10,7 +10,7 @@ from .batch_size_policy import DEFAULT_BATCH_SIZE_POLICY, get_batch_size_by_num_
 @dataclass
 class ExperimentConfig:
     name: str = "mnas_lcsmc_federated"
-    mode: str = "homogeneous"
+    mode: str = "heterogeneous"
     num_clients: int = 10
     rounds: int = 100
     seed: int = 42
@@ -111,8 +111,12 @@ class MNASConfig:
 
     def validate(self) -> None:
         mode = self.experiment.mode.lower()
-        if mode not in {"homogeneous", "heterogeneous"}:
-            raise ValueError("experiment.mode must be 'homogeneous' or 'heterogeneous'")
+        if mode != "heterogeneous":
+            raise ValueError(
+                "MNAS paper uses heterogeneous personalized architectures with a unified proxy model. "
+                "Server-only homogeneous evaluation is disabled; use experiment.mode='heterogeneous'."
+            )
+        self.experiment.mode = mode
         if self.experiment.rounds < 1:
             raise ValueError("experiment.rounds must be >= 1")
         if self.federated.local_epochs_per_round < 1:

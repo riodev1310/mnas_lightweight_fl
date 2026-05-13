@@ -1,4 +1,4 @@
 #!/usr/bin/env bash
 set -euo pipefail
 cd "$(dirname "$0")/.."
-python -m runner.run_experiment --num-clients 20 --mode heterogeneous --rounds 100 --save-every-round true --eval-every-round true
+python -m runner.run_experiment --num-clients 20 --rounds 100 --save-every-round true --eval-every-round true

@@ -3,8 +3,6 @@ from __future__ import annotations
 import copy
 
 import torch
-
-from evaluation.evaluator import evaluate_model
 from models.proxy_model import ProxyLCSMC
 
 from .aggregation import AggregationStrategy
@@ -16,16 +14,12 @@ class MNASServer:
         *,
         input_dim: int,
         num_labels: int,
-        label_names: list[str],
-        eval_loader,
         cfg,
         device: torch.device,
         aggregation_strategy: AggregationStrategy,
     ) -> None:
         self.cfg = cfg
         self.device = device
-        self.label_names = label_names
-        self.eval_loader = eval_loader
         self.aggregation_strategy = aggregation_strategy
         self.global_model = ProxyLCSMC(
             input_dim=input_dim,
@@ -51,15 +45,6 @@ class MNASServer:
             "aggregated_samples": int(sum(n for _, n in uploaded)),
         }
         return self.last_aggregation_result
-
-    def evaluate_global(self, round_idx: int):
-        return evaluate_model(
-            self.global_model,
-            self.eval_loader,
-            threshold=self.cfg.evaluation.threshold,
-            device=self.device,
-            label_names=self.label_names,
-        )
 
     def architecture_config(self) -> dict[str, object]:
         return {

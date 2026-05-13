@@ -16,7 +16,6 @@ from utils.serialization import to_jsonable
 def build_parser() -> argparse.ArgumentParser:
     parser = argparse.ArgumentParser(description="Run MNAS scenarios for 10, 20, and 50 clients.")
     parser.add_argument("--config", default=None)
-    parser.add_argument("--mode", choices=["homogeneous", "heterogeneous"], default=None)
     parser.add_argument("--rounds", type=int, default=None)
     parser.add_argument("--data-path", default=None)
     parser.add_argument("--output-dir", default=None)
@@ -34,8 +33,6 @@ def main() -> None:
     for n in [10, 20, 50]:
         cfg = copy.deepcopy(base)
         cfg.experiment.num_clients = n
-        if args.mode is not None:
-            cfg.experiment.mode = args.mode
         if args.rounds is not None:
             cfg.experiment.rounds = args.rounds
         if args.data_path is not None:

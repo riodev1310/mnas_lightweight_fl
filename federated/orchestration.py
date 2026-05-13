@@ -10,7 +10,7 @@ import torch
 
 from checkpointing import CheckpointManager
 from config.default_config import MNASConfig
-from data import build_client_dataloaders, build_global_eval_dataloader, prepare_tabular_data
+from data import build_client_dataloaders, prepare_tabular_data
 from evaluation.evaluator import sanity_check_shapes
 from federated.aggregation import FedAvgAggregation
 from federated.client import MNASClient
@@ -78,13 +78,6 @@ class MNASFederatedOrchestrator:
             pin_memory=cfg.data.pin_memory and self.device.type == "cuda",
             shuffle=False,
         )
-        global_eval_loader = build_global_eval_dataloader(
-            self.data_bundle.dataset,
-            batch_size=self.batch_size,
-            num_workers=cfg.data.num_workers,
-            pin_memory=cfg.data.pin_memory and self.device.type == "cuda",
-        )
-
         self.metrics_recorder = MetricsRecorder(
             self.output_dir,
             mode=cfg.experiment.mode,
@@ -140,8 +133,6 @@ class MNASFederatedOrchestrator:
         self.server = MNASServer(
             input_dim=input_dim,
             num_labels=num_labels,
-            label_names=self.data_bundle.label_names,
-            eval_loader=global_eval_loader,
             cfg=cfg,
             device=self.device,
             aggregation_strategy=FedAvgAggregation(),
@@ -176,45 +167,29 @@ class MNASFederatedOrchestrator:
             extra.update(aggregation_result)
 
             if self.config.federated.eval_every_round:
-                if self.config.experiment.mode == "homogeneous":
-                    metrics = self.server.evaluate_global(round_idx)
-                    self.metrics_recorder.log_round_metrics(round_idx, metrics, extra=extra)
-                    self.metrics_recorder.save_classification_report(round_idx, metrics)
-                    self.metrics_recorder.save_confusion_matrix(round_idx, metrics)
+                client_metrics = []
+                for client in all_clients:
+                    metrics = client.evaluate_local(round_idx)
+                    client_extra = {
+                        **extra,
+                        "num_samples": client.num_samples,
+                        "label_coverage": ",".join(map(str, client.label_coverage)),
+                    }
+                    self.metrics_recorder.log_client_metrics(round_idx, client.client_id, metrics, extra=client_extra)
+                    self.metrics_recorder.save_client_classification_report(round_idx, client.client_id, metrics)
+                    self.metrics_recorder.save_client_confusion_matrix(round_idx, client.client_id, metrics)
                     if self._should_checkpoint(round_idx):
-                        self.checkpoint_manager.save_server_checkpoint(
+                        self.checkpoint_manager.save_client_checkpoint(
                             round_idx=round_idx,
-                            server=self.server,
+                            client=client,
                             metrics=metrics,
                             config=self.config,
                             batch_size=self.batch_size,
                         )
-                    self.round_history.append({"round_idx": round_idx, **metrics.scalar_dict(), **extra})
-                    self.logger.info("Finished round %03d | loss=%.6f | macro_f1=%.6f", round_idx, metrics.loss, metrics.macro_f1)
-                else:
-                    client_metrics = []
-                    for client in all_clients:
-                        metrics = client.evaluate_local(round_idx)
-                        client_extra = {
-                            **extra,
-                            "num_samples": client.num_samples,
-                            "label_coverage": ",".join(map(str, client.label_coverage)),
-                        }
-                        self.metrics_recorder.log_client_metrics(round_idx, client.client_id, metrics, extra=client_extra)
-                        self.metrics_recorder.save_client_classification_report(round_idx, client.client_id, metrics)
-                        self.metrics_recorder.save_client_confusion_matrix(round_idx, client.client_id, metrics)
-                        if self._should_checkpoint(round_idx):
-                            self.checkpoint_manager.save_client_checkpoint(
-                                round_idx=round_idx,
-                                client=client,
-                                metrics=metrics,
-                                config=self.config,
-                                batch_size=self.batch_size,
-                            )
-                        client_metrics.append(metrics.scalar_dict())
-                    avg_row = self._average_client_metrics(round_idx, client_metrics, extra)
-                    self.round_history.append(avg_row)
-                    self.logger.info("Finished round %03d | avg_macro_f1=%.6f", round_idx, avg_row.get("macro_f1", 0.0))
+                    client_metrics.append(metrics.scalar_dict())
+                avg_row = self._average_client_metrics(round_idx, client_metrics, extra)
+                self.round_history.append(avg_row)
+                self.logger.info("Finished round %03d | avg_macro_f1=%.6f", round_idx, avg_row.get("macro_f1", 0.0))
             else:
                 self.logger.info("Finished round %03d | evaluation skipped by config", round_idx)
 
@@ -240,11 +215,7 @@ class MNASFederatedOrchestrator:
             for client in self.clients:
                 fine_tune_personalized_model(client, cfg=self.config, device=self.device)
         if self.config.outputs.save_plots and self.metrics_recorder is not None:
-            metrics_csv = (
-                self.metrics_recorder.round_csv
-                if self.config.experiment.mode == "homogeneous"
-                else self.metrics_recorder.client_csv
-            )
+            metrics_csv = self.metrics_recorder.client_csv
             if metrics_csv.exists():
                 plot_round_metrics(metrics_csv, self.output_dir / "plots" / self.config.experiment.mode / f"clients_{self.config.experiment.num_clients}")
 
@@ -282,8 +253,6 @@ class MNASFederatedOrchestrator:
         return avg
 
     def _count_evaluation_records(self) -> int:
-        if self.config.experiment.mode == "homogeneous":
-            return len(self.round_history)
         return len(self.round_history) * self.config.experiment.num_clients
 
 

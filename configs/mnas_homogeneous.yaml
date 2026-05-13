@@ -1,5 +1,7 @@
 experiment:
-  mode: "homogeneous"
+  # Legacy filename kept for compatibility. The MNAS paper uses heterogeneous
+  # personalized architectures plus a unified proxy model.
+  mode: "heterogeneous"
   num_clients: 10
   rounds: 100
 

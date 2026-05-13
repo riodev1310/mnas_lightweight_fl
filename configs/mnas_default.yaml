@@ -1,6 +1,6 @@
 experiment:
   name: "mnas_lcsmc_federated"
-  mode: "homogeneous"
+  mode: "heterogeneous"
   num_clients: 10
   rounds: 100
   seed: 42

@@ -6,7 +6,7 @@ This folder is intentionally runnable as the project root.
 
 ```bash
 cd mnas_project
-python -m runner.run_experiment --num-clients 10 --mode homogeneous --rounds 100
+python -m runner.run_experiment --num-clients 10 --rounds 100
 ```
 
 Quick smoke test:
@@ -14,7 +14,6 @@ Quick smoke test:
 ```bash
 python -m runner.run_experiment \
   --num-clients 10 \
-  --mode homogeneous \
   --rounds 2 \
   --max-samples 100 \
   --num-workers 0 \
@@ -24,9 +23,32 @@ python -m runner.run_experiment \
 Run all scenarios:
 
 ```bash
-python -m runner.run_all --mode homogeneous --rounds 100
-python -m runner.run_all --mode heterogeneous --rounds 100
+python -m runner.run_all --rounds 100
 ```
+
+## Paper-Faithful Architecture Mode
+
+The MNAS paper in this repository uses heterogeneous personalized architectures on clients.
+The server aggregates only the unified proxy model weights and distributes
+the aggregated proxy weights back to clients. Personalized architectures and
+weights stay on each client.
+
+Because of that, this project does not expose a `--mode homogeneous` switch.
+After each aggregation round, evaluation is performed per client on the
+personalized model, and each client checkpoint is saved.
+
+That means a 100-round run with 10 clients writes 1000 client evaluation
+records, not 100 server-only records.
+
+## Tests
+
+```bash
+python -m compileall -q .
+python -m pytest tests -q
+```
+
+If `pytest` is not installed yet, run `python -m pip install -r requirements.txt`
+first.
 
 ## Layout
 
