@@ -21,6 +21,8 @@ def build_parser() -> argparse.ArgumentParser:
     parser.add_argument("--save-every-round", type=str_to_bool, default=None)
     parser.add_argument("--eval-every-round", type=str_to_bool, default=None)
     parser.add_argument("--data-path", default=None)
+    parser.add_argument("--test-ratio", type=float, default=None)
+    parser.add_argument("--distribution-dir", default=None, help="Optional existing split/partition artifact directory to reuse.")
     parser.add_argument("--output-dir", default=None)
     parser.add_argument("--device", default=None)
     parser.add_argument("--seed", type=int, default=None)

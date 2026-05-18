@@ -69,6 +69,10 @@ def build_config_from_args(args: argparse.Namespace) -> MNASConfig:
         cfg.experiment.device = str(args.device)
     if getattr(args, "data_path", None) is not None:
         cfg.data.data_path = str(args.data_path)
+    if getattr(args, "test_ratio", None) is not None:
+        cfg.data.test_ratio = float(args.test_ratio)
+    if getattr(args, "distribution_dir", None) is not None:
+        cfg.data.distribution_dir = str(args.distribution_dir)
     if getattr(args, "output_dir", None) is not None:
         cfg.outputs.output_dir = str(args.output_dir)
     if getattr(args, "max_samples", None) is not None:

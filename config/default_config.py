@@ -21,7 +21,9 @@ class ExperimentConfig:
 @dataclass
 class DataConfig:
     data_path: str = "./datasets/road_multi_label.csv"
-    use_all_data_for_training: bool = True
+    use_all_data_for_training: bool = False
+    test_ratio: float = 0.2
+    distribution_dir: str | None = None
     num_workers: int = 4
     pin_memory: bool = True
     max_samples: int | None = None
@@ -120,6 +122,8 @@ class MNASConfig:
         self.experiment.mode = mode
         if self.experiment.rounds < 1:
             raise ValueError("experiment.rounds must be >= 1")
+        if not (0.0 < float(self.data.test_ratio) < 1.0):
+            raise ValueError("data.test_ratio must be in (0, 1)")
         if self.experiment.resume_from_round is not None:
             if self.experiment.resume_from_round < 1:
                 raise ValueError("experiment.resume_from_round must be >= 1")

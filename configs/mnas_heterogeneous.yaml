@@ -5,6 +5,9 @@ experiment:
 
 data:
   data_path: "./datasets/road_multi_label.csv"
+  use_all_data_for_training: false
+  test_ratio: 0.2
+  distribution_dir:
 
 outputs:
   output_dir: "./outputs"

@@ -60,6 +60,37 @@ personalized model, and each client checkpoint is saved.
 That means a 100-round run with 10 clients writes 1000 client evaluation
 records, not 100 server-only records.
 
+## Data Split Protocol
+
+MNAS now follows the benchmark protocol used for fair method comparison:
+
+1. Load the raw dataset once.
+2. Split a deterministic global train/test set first. Default: `test_ratio=0.2`.
+3. Partition only the global train set into non-IID client train sets.
+4. Train each client only on its `client_train` partition.
+5. After every server proxy aggregation round, evaluate every personalized
+   client model on the same global held-out test set.
+
+The train/test split and client train partition are saved under:
+
+```text
+outputs/distribution/seed_<seed>/test_ratio_<ratio>/dirichlet_alpha_<alpha>/clients_<N>/
+```
+
+To force MNAS to reuse an existing distribution artifact instead of creating a
+new one, pass the scenario directory:
+
+```bash
+python -m runner.run_experiment \
+  --num-clients 10 \
+  --rounds 100 \
+  --distribution-dir outputs/distribution/seed_42/test_ratio_0.20/dirichlet_alpha_0.5/clients_10
+```
+
+The per-round metrics include `eval_scope=global_test` and `eval_samples`, so
+it is clear the reported test metrics are no longer computed on the training
+partition.
+
 ## Tests
 
 ```bash

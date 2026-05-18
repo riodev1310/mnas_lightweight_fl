@@ -11,7 +11,8 @@ import torch
 
 from checkpointing import CheckpointManager
 from config.default_config import MNASConfig
-from data import build_client_dataloaders, prepare_tabular_data
+from config.paths import resolve_project_path
+from data import build_client_dataloaders, build_global_eval_dataloader, prepare_tabular_data
 from evaluation.evaluator import sanity_check_shapes
 from federated.aggregation import FedAvgAggregation
 from federated.client import MNASClient
@@ -19,7 +20,7 @@ from federated.server import MNASServer
 from federated.trainer import build_optimizer, fine_tune_personalized_model
 from models.personalized_model import PersonalizedSearchedLCSMC
 from models.proxy_model import ProxyLCSMC
-from partition import build_partition_with_retry, get_label_coverage_for_client
+from partition import build_partition_with_retry, compute_partition_integrity, get_label_coverage_for_client, partition_stats
 from reporting import MetricsRecorder, plot_round_metrics, save_results_summary
 from search import build_operation_cost_table, search_personalized_architecture
 from utils import configure_logging, resolve_device, set_seed
@@ -45,21 +46,37 @@ class MNASFederatedOrchestrator:
         cfg = self.config
         set_seed(cfg.experiment.seed)
         self.logger.info("Loading dataset from %s", cfg.data.data_path)
-        self.data_bundle = prepare_tabular_data(cfg.data.data_path, max_samples=cfg.data.max_samples)
+        self.data_bundle = prepare_tabular_data(
+            cfg.data.data_path,
+            max_samples=cfg.data.max_samples,
+            test_ratio=cfg.data.test_ratio,
+            seed=cfg.experiment.seed,
+            distribution_dir=cfg.data.distribution_dir,
+        )
         self.logger.info("Dataset summary: %s", self.data_bundle.summary)
+        self.logger.info(
+            "Global split: train=%d test=%d test_ratio=%.3f seed=%d",
+            len(self.data_bundle.dataset),
+            len(self.data_bundle.test_dataset),
+            cfg.data.test_ratio,
+            cfg.experiment.seed,
+        )
 
         input_dim = self.data_bundle.x.shape[1]
         num_labels = self.data_bundle.y.shape[1]
         sanity_check_shapes(self.data_bundle.x, self.data_bundle.y, num_labels=num_labels, feature_dim=input_dim)
+        sanity_check_shapes(self.data_bundle.test_x, self.data_bundle.test_y, num_labels=num_labels, feature_dim=input_dim)
 
-        self.partition_pack = build_partition_with_retry(
-            labels_for_partition=self.data_bundle.primary_labels,
-            y_multi=self.data_bundle.y,
-            label_names=self.data_bundle.label_names,
-            num_clients=cfg.experiment.num_clients,
-            partition_config=cfg.partition,
-            seed=cfg.experiment.seed,
-        )
+        self.partition_pack = self._load_partition_from_distribution_dir()
+        if self.partition_pack is None:
+            self.partition_pack = build_partition_with_retry(
+                labels_for_partition=self.data_bundle.primary_labels,
+                y_multi=self.data_bundle.y,
+                label_names=self.data_bundle.label_names,
+                num_clients=cfg.experiment.num_clients,
+                partition_config=cfg.partition,
+                seed=cfg.experiment.seed,
+            )
         partition = self.partition_pack["partition"]
         self.logger.info("Partition integrity: %s", self.partition_pack["integrity"])
         resume_round = cfg.experiment.resume_from_round
@@ -73,13 +90,11 @@ class MNASFederatedOrchestrator:
             pin_memory=cfg.data.pin_memory and self.device.type == "cuda",
             shuffle=True,
         )
-        eval_loaders = build_client_dataloaders(
-            self.data_bundle.dataset,
-            partition,
+        global_test_loader = build_global_eval_dataloader(
+            self.data_bundle.test_dataset,
             batch_size=self.batch_size,
             num_workers=cfg.data.num_workers,
             pin_memory=cfg.data.pin_memory and self.device.type == "cuda",
-            shuffle=False,
         )
         self.metrics_recorder = MetricsRecorder(
             self.output_dir,
@@ -125,7 +140,7 @@ class MNASFederatedOrchestrator:
             client = MNASClient(
                 client_id=cid,
                 train_loader=train_loaders[cid],
-                eval_loader=eval_loaders[cid],
+                eval_loader=global_test_loader,
                 num_samples=int(len(partition[cid])),
                 selected_ops=selected_ops,
                 personalized_model=personalized,
@@ -188,6 +203,8 @@ class MNASFederatedOrchestrator:
                     client_extra = {
                         **extra,
                         "num_samples": client.num_samples,
+                        "eval_samples": len(self.data_bundle.test_dataset),
+                        "eval_scope": "global_test",
                         "label_coverage": ",".join(map(str, client.label_coverage)),
                     }
                     self.metrics_recorder.log_client_metrics(round_idx, client.client_id, metrics, extra=client_extra)
@@ -315,14 +332,115 @@ class MNASFederatedOrchestrator:
         }
         self.logger.info("Reconstructed server proxy state from round %03d client checkpoints.", round_idx)
 
+    def _distribution_dir(self) -> Path:
+        if self.config.data.distribution_dir:
+            return resolve_project_path(self.config.data.distribution_dir)
+        return (
+            self.output_dir
+            / "distribution"
+            / f"seed_{self.config.experiment.seed}"
+            / f"test_ratio_{self.config.data.test_ratio:.2f}"
+            / f"dirichlet_alpha_{self.config.partition.dirichlet_alpha}"
+            / f"clients_{self.config.experiment.num_clients}"
+        )
+
+    def _load_partition_from_distribution_dir(self) -> dict[str, Any] | None:
+        if not self.config.data.distribution_dir:
+            return None
+        assert self.data_bundle is not None
+        root = self._distribution_dir()
+        partition_path = root / "client_train_indices.npz"
+        if not partition_path.exists():
+            return None
+
+        loaded = np.load(partition_path)
+        partition = [
+            loaded[f"client_{cid:03d}"].astype(np.int64)
+            for cid in range(self.config.experiment.num_clients)
+            if f"client_{cid:03d}" in loaded.files
+        ]
+        if len(partition) != self.config.experiment.num_clients:
+            raise ValueError(
+                f"Distribution partition at {partition_path} has {len(partition)} clients; "
+                f"expected {self.config.experiment.num_clients}."
+            )
+        flat = np.concatenate(partition) if partition else np.array([], dtype=np.int64)
+        if len(flat) == 0 or flat.min() < 0 or flat.max() >= len(self.data_bundle.dataset):
+            raise ValueError(
+                f"Distribution partition at {partition_path} has indices outside the train dataset size "
+                f"{len(self.data_bundle.dataset)}."
+            )
+
+        integrity = compute_partition_integrity(partition, len(self.data_bundle.dataset))
+        if not integrity["covers_all"] or integrity["duplicate_count"] != 0:
+            raise ValueError(f"Distribution partition at {partition_path} is invalid: {integrity}")
+
+        self.logger.info("Loaded train partition from shared distribution artifact: %s", partition_path)
+        return {
+            "partition": partition,
+            "repaired_clients": [],
+            "removed_clients": [],
+            "stats": partition_stats(partition, y_multi=self.data_bundle.y, label_names=self.data_bundle.label_names),
+            "integrity": integrity,
+            "score": None,
+            "seed": self.config.experiment.seed,
+            "attempt": -1,
+            "source": "loaded_distribution",
+        }
+
     def _save_split_summary(self) -> None:
         assert self.partition_pack is not None
+        assert self.data_bundle is not None
         mode = self.config.experiment.mode
         n = self.config.experiment.num_clients
         out = self.output_dir / "metrics" / mode / f"clients_{n}"
         out.mkdir(parents=True, exist_ok=True)
         self.partition_pack["stats"].to_csv(out / "client_split_summary.csv", index=False)
         pd.DataFrame([to_jsonable(self.partition_pack["integrity"])]).to_csv(out / "partition_integrity.csv", index=False)
+        pd.DataFrame(
+            [
+                {
+                    "split": "train",
+                    "num_samples": int(len(self.data_bundle.dataset)),
+                    "source": "global_split",
+                    "test_ratio": float(self.config.data.test_ratio),
+                    "seed": int(self.config.experiment.seed),
+                },
+                {
+                    "split": "test",
+                    "num_samples": int(len(self.data_bundle.test_dataset)),
+                    "source": "global_split",
+                    "test_ratio": float(self.config.data.test_ratio),
+                    "seed": int(self.config.experiment.seed),
+                },
+            ]
+        ).to_csv(out / "global_train_test_split_summary.csv", index=False)
+
+        distribution_dir = self._distribution_dir()
+        distribution_dir.mkdir(parents=True, exist_ok=True)
+        np.save(distribution_dir / "global_train_indices.npy", self.data_bundle.train_indices)
+        np.save(distribution_dir / "global_test_indices.npy", self.data_bundle.test_indices)
+        np.savez_compressed(
+            distribution_dir / "client_train_indices.npz",
+            **{f"client_{cid:03d}": idx for cid, idx in enumerate(self.partition_pack["partition"])},
+        )
+        self.partition_pack["stats"].to_csv(distribution_dir / "client_train_split_summary.csv", index=False)
+        pd.DataFrame([to_jsonable(self.partition_pack["integrity"])]).to_csv(distribution_dir / "partition_integrity.csv", index=False)
+        pd.DataFrame(
+            [
+                {
+                    "data_path": self.config.data.data_path,
+                    "num_clients": int(n),
+                    "train_samples": int(len(self.data_bundle.dataset)),
+                    "test_samples": int(len(self.data_bundle.test_dataset)),
+                    "test_ratio": float(self.config.data.test_ratio),
+                    "seed": int(self.config.experiment.seed),
+                    "partition_seed": int(self.partition_pack.get("seed", self.config.experiment.seed)),
+                    "partition_attempt": int(self.partition_pack.get("attempt", 0)),
+                    "dirichlet_alpha": float(self.config.partition.dirichlet_alpha),
+                }
+            ]
+        ).to_csv(distribution_dir / "metadata.csv", index=False)
 
     def _average_client_metrics(
         self,

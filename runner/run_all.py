@@ -3,6 +3,7 @@ from __future__ import annotations
 import argparse
 import copy
 import json
+from pathlib import Path
 
 from ._bootstrap import ensure_project_parent_on_path
 
@@ -19,6 +20,8 @@ def build_parser() -> argparse.ArgumentParser:
     parser.add_argument("--rounds", type=int, default=None)
     parser.add_argument("--resume-from-round", type=int, default=None, help="Resume each scenario from completed client checkpoints at this round.")
     parser.add_argument("--data-path", default=None)
+    parser.add_argument("--test-ratio", type=float, default=None)
+    parser.add_argument("--distribution-dir", default=None, help="Optional distribution directory; clients_N subfolders are used when present.")
     parser.add_argument("--output-dir", default=None)
     parser.add_argument("--device", default=None)
     parser.add_argument("--max-samples", type=int, default=None)
@@ -40,6 +43,12 @@ def main() -> None:
             cfg.experiment.resume_from_round = args.resume_from_round
         if args.data_path is not None:
             cfg.data.data_path = args.data_path
+        if args.test_ratio is not None:
+            cfg.data.test_ratio = float(args.test_ratio)
+        if args.distribution_dir is not None:
+            distribution_dir = Path(args.distribution_dir)
+            scenario_dir = distribution_dir / f"clients_{n}"
+            cfg.data.distribution_dir = str(scenario_dir if scenario_dir.exists() else distribution_dir)
         if args.output_dir is not None:
             cfg.outputs.output_dir = args.output_dir
         if args.device is not None:
