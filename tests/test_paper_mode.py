@@ -18,3 +18,9 @@ def test_cli_does_not_expose_mode_switch():
     help_text = build_parser().format_help()
 
     assert "--mode" not in help_text
+
+
+def test_cli_exposes_resume_from_round():
+    help_text = build_parser().format_help()
+
+    assert "--resume-from-round" in help_text

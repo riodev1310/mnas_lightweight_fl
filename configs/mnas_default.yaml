@@ -5,6 +5,7 @@ experiment:
   rounds: 100
   seed: 42
   device: "auto"
+  resume_from_round:
 
 data:
   data_path: "./datasets/road_multi_label.csv"

@@ -2,8 +2,11 @@ from __future__ import annotations
 
 import csv
 import json
+import re
 from pathlib import Path
 from typing import Any, Sequence
+
+import pandas as pd
 
 from evaluation.classification_report import save_classification_report
 from evaluation.confusion_matrix import save_confusion_matrix_artifacts
@@ -39,6 +42,16 @@ class MetricsRecorder:
             for path in [self.round_csv, self.round_jsonl, self.client_csv, self.client_jsonl]:
                 if path.exists():
                     path.unlink()
+
+    def prune_after_round(self, round_idx: int) -> None:
+        """Keep only metrics/artifacts up to a completed resume round."""
+
+        self._prune_csv(self.round_csv, round_idx)
+        self._prune_csv(self.client_csv, round_idx)
+        self._prune_jsonl(self.round_jsonl, round_idx)
+        self._prune_jsonl(self.client_jsonl, round_idx)
+        self._delete_round_artifacts_after(self.report_dir, round_idx)
+        self._delete_round_artifacts_after(self.cm_dir, round_idx)
 
     def log_round_metrics(self, round_idx: int, metrics: EvaluationResult, extra: dict[str, Any] | None = None) -> None:
         row = {"round_idx": int(round_idx), "num_clients": self.num_clients}
@@ -94,3 +107,39 @@ class MetricsRecorder:
             if not exists:
                 writer.writeheader()
             writer.writerow(row)
+
+    @staticmethod
+    def _prune_csv(path: Path, round_idx: int) -> None:
+        if not path.exists():
+            return
+        df = pd.read_csv(path)
+        if "round_idx" not in df.columns:
+            return
+        df = df[df["round_idx"].astype(int) <= int(round_idx)]
+        df.to_csv(path, index=False)
+
+    @staticmethod
+    def _prune_jsonl(path: Path, round_idx: int) -> None:
+        if not path.exists():
+            return
+        kept = []
+        with path.open("r", encoding="utf-8") as f:
+            for line in f:
+                if not line.strip():
+                    continue
+                row = json.loads(line)
+                if int(row.get("round_idx", 0)) <= int(round_idx):
+                    kept.append(row)
+        with path.open("w", encoding="utf-8") as f:
+            for row in kept:
+                f.write(json.dumps(to_jsonable(row), ensure_ascii=False) + "\n")
+
+    @staticmethod
+    def _delete_round_artifacts_after(directory: Path, round_idx: int) -> None:
+        if not directory.exists():
+            return
+        pattern = re.compile(r"round_(\d{3})")
+        for path in directory.glob("round_*"):
+            match = pattern.search(path.name)
+            if match and int(match.group(1)) > int(round_idx):
+                path.unlink()

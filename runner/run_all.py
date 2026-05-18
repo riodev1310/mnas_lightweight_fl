@@ -17,6 +17,7 @@ def build_parser() -> argparse.ArgumentParser:
     parser = argparse.ArgumentParser(description="Run MNAS scenarios for 10, 20, and 50 clients.")
     parser.add_argument("--config", default=None)
     parser.add_argument("--rounds", type=int, default=None)
+    parser.add_argument("--resume-from-round", type=int, default=None, help="Resume each scenario from completed client checkpoints at this round.")
     parser.add_argument("--data-path", default=None)
     parser.add_argument("--output-dir", default=None)
     parser.add_argument("--device", default=None)
@@ -35,6 +36,8 @@ def main() -> None:
         cfg.experiment.num_clients = n
         if args.rounds is not None:
             cfg.experiment.rounds = args.rounds
+        if args.resume_from_round is not None:
+            cfg.experiment.resume_from_round = args.resume_from_round
         if args.data_path is not None:
             cfg.data.data_path = args.data_path
         if args.output_dir is not None:

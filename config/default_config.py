@@ -15,6 +15,7 @@ class ExperimentConfig:
     rounds: int = 100
     seed: int = 42
     device: str = "auto"
+    resume_from_round: int | None = None
 
 
 @dataclass
@@ -119,6 +120,11 @@ class MNASConfig:
         self.experiment.mode = mode
         if self.experiment.rounds < 1:
             raise ValueError("experiment.rounds must be >= 1")
+        if self.experiment.resume_from_round is not None:
+            if self.experiment.resume_from_round < 1:
+                raise ValueError("experiment.resume_from_round must be >= 1")
+            if self.experiment.resume_from_round >= self.experiment.rounds:
+                raise ValueError("experiment.resume_from_round must be smaller than experiment.rounds")
         if self.federated.local_epochs_per_round < 1:
             raise ValueError("federated.local_epochs_per_round must be >= 1")
         if not (0 < self.federated.client_fraction <= 1):

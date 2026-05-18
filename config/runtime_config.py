@@ -61,6 +61,8 @@ def build_config_from_args(args: argparse.Namespace) -> MNASConfig:
         cfg.experiment.num_clients = int(args.num_clients)
     if getattr(args, "rounds", None) is not None:
         cfg.experiment.rounds = int(args.rounds)
+    if getattr(args, "resume_from_round", None) is not None:
+        cfg.experiment.resume_from_round = int(args.resume_from_round)
     if getattr(args, "seed", None) is not None:
         cfg.experiment.seed = int(args.seed)
     if getattr(args, "device", None) is not None:

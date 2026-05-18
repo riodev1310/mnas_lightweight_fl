@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import copy
 import time
 from pathlib import Path
 from typing import Any
@@ -61,6 +62,8 @@ class MNASFederatedOrchestrator:
         )
         partition = self.partition_pack["partition"]
         self.logger.info("Partition integrity: %s", self.partition_pack["integrity"])
+        resume_round = cfg.experiment.resume_from_round
+        resume_checkpoints = self._load_resume_checkpoints() if resume_round is not None else None
 
         train_loaders = build_client_dataloaders(
             self.data_bundle.dataset,
@@ -83,22 +86,29 @@ class MNASFederatedOrchestrator:
             mode=cfg.experiment.mode,
             num_clients=cfg.experiment.num_clients,
             label_names=self.data_bundle.label_names,
-            overwrite=cfg.outputs.overwrite_metrics,
+            overwrite=cfg.outputs.overwrite_metrics and resume_round is None,
         )
+        if resume_round is not None:
+            self.metrics_recorder.prune_after_round(resume_round)
         self._save_split_summary()
 
-        op_cost = build_operation_cost_table()
+        op_cost = build_operation_cost_table() if resume_checkpoints is None else None
         self.clients = []
         for cpos, cid in enumerate(sorted(train_loaders.keys()), 1):
             self.logger.info("Preparing client %s/%s", cpos, len(train_loaders))
-            selected_ops = search_personalized_architecture(
-                train_loader=train_loaders[cid],
-                input_dim=input_dim,
-                num_labels=num_labels,
-                cfg=cfg,
-                op_cost=op_cost,
-                device=self.device,
-            )
+            checkpoint = resume_checkpoints.get(cid) if resume_checkpoints is not None else None
+            if checkpoint is not None:
+                selected_ops = self._selected_ops_from_checkpoint(checkpoint)
+            else:
+                assert op_cost is not None
+                selected_ops = search_personalized_architecture(
+                    train_loader=train_loaders[cid],
+                    input_dim=input_dim,
+                    num_labels=num_labels,
+                    cfg=cfg,
+                    op_cost=op_cost,
+                    device=self.device,
+                )
             personalized = PersonalizedSearchedLCSMC(
                 input_dim=input_dim,
                 num_labels=num_labels,
@@ -112,23 +122,24 @@ class MNASFederatedOrchestrator:
                 channels=cfg.model.hidden_channels,
                 reduction=cfg.model.attention_reduction,
             ).to(self.device)
-            self.clients.append(
-                MNASClient(
-                    client_id=cid,
-                    train_loader=train_loaders[cid],
-                    eval_loader=eval_loaders[cid],
-                    num_samples=int(len(partition[cid])),
-                    selected_ops=selected_ops,
-                    personalized_model=personalized,
-                    proxy_model=proxy,
-                    opt_personalized=build_optimizer(personalized, cfg),
-                    opt_proxy=build_optimizer(proxy, cfg),
-                    label_coverage=get_label_coverage_for_client(partition[cid], self.data_bundle.y),
-                    label_names=self.data_bundle.label_names,
-                    cfg=cfg,
-                    device=self.device,
-                )
+            client = MNASClient(
+                client_id=cid,
+                train_loader=train_loaders[cid],
+                eval_loader=eval_loaders[cid],
+                num_samples=int(len(partition[cid])),
+                selected_ops=selected_ops,
+                personalized_model=personalized,
+                proxy_model=proxy,
+                opt_personalized=build_optimizer(personalized, cfg),
+                opt_proxy=build_optimizer(proxy, cfg),
+                label_coverage=get_label_coverage_for_client(partition[cid], self.data_bundle.y),
+                label_names=self.data_bundle.label_names,
+                cfg=cfg,
+                device=self.device,
             )
+            if checkpoint is not None:
+                self._restore_client_from_checkpoint(client, checkpoint)
+            self.clients.append(client)
 
         self.server = MNASServer(
             input_dim=input_dim,
@@ -137,8 +148,11 @@ class MNASFederatedOrchestrator:
             device=self.device,
             aggregation_strategy=FedAvgAggregation(),
         )
-        first_state = self.clients[0].proxy_model.state_dict()
-        self.server.global_model.load_state_dict(first_state, strict=True)
+        if resume_round is not None:
+            self._restore_server_proxy_from_clients(resume_round)
+        else:
+            first_state = self.clients[0].proxy_model.state_dict()
+            self.server.global_model.load_state_dict(first_state, strict=True)
 
     def run(self) -> dict[str, Any]:
         if self.server is None:
@@ -150,7 +164,8 @@ class MNASFederatedOrchestrator:
         rng = np.random.default_rng(self.config.experiment.seed + self.config.experiment.num_clients)
         all_clients = sorted(self.clients, key=lambda c: c.client_id)
 
-        for round_idx in range(1, self.config.experiment.rounds + 1):
+        start_round = (self.config.experiment.resume_from_round or 0) + 1
+        for round_idx in range(start_round, self.config.experiment.rounds + 1):
             self.logger.info("Starting round %03d/%03d", round_idx, self.config.experiment.rounds)
             self.server.distribute_to_clients(all_clients)
             active_clients = self._select_active_clients(all_clients, rng)
@@ -205,6 +220,7 @@ class MNASFederatedOrchestrator:
             "elapsed_sec": elapsed,
             "evaluation_records": self._count_evaluation_records(),
             "output_dir": str(self.output_dir),
+            "resumed_from_round": self.config.experiment.resume_from_round,
         }
         summary.update(self.round_history[-1] if self.round_history else {})
         save_results_summary(summary, self.output_dir)
@@ -230,6 +246,75 @@ class MNASFederatedOrchestrator:
     def _should_checkpoint(self, round_idx: int) -> bool:
         return bool(self.config.outputs.save_checkpoints and self.config.federated.checkpoint_every_round)
 
+    def _load_resume_checkpoints(self) -> dict[int, dict[str, Any]]:
+        resume_round = self.config.experiment.resume_from_round
+        assert resume_round is not None
+        if self.config.federated.client_fraction < 1.0:
+            raise ValueError(
+                "Resume from client checkpoints is exact only when federated.client_fraction=1.0. "
+                "Existing checkpoints do not record active client ids for partial-client rounds."
+            )
+        checkpoints = self.checkpoint_manager.load_client_round_checkpoints(
+            self.config.experiment.mode,
+            self.config.experiment.num_clients,
+            resume_round,
+            map_location="cpu",
+        )
+        self.logger.info(
+            "Loaded %d client checkpoints from round %03d; metrics after this round will be pruned before append.",
+            len(checkpoints),
+            resume_round,
+        )
+        return checkpoints
+
+    def _selected_ops_from_checkpoint(self, checkpoint: dict[str, Any]) -> list[list[str]]:
+        selected_ops = checkpoint.get("selected_ops") or checkpoint.get("architecture")
+        if not selected_ops:
+            raise ValueError(f"Checkpoint for client {checkpoint.get('client_id')} does not contain selected_ops")
+        return [[str(op) for op in ops] for ops in selected_ops]
+
+    def _restore_client_from_checkpoint(self, client: MNASClient, checkpoint: dict[str, Any]) -> None:
+        resume_round = self.config.experiment.resume_from_round
+        if int(checkpoint.get("round_idx", -1)) != int(resume_round):
+            raise ValueError(f"Client {client.client_id} checkpoint round mismatch: {checkpoint.get('round_idx')} != {resume_round}")
+        if int(checkpoint.get("client_id", -1)) != int(client.client_id):
+            raise ValueError(f"Client checkpoint id mismatch: {checkpoint.get('client_id')} != {client.client_id}")
+        if int(checkpoint.get("num_clients", -1)) != int(self.config.experiment.num_clients):
+            raise ValueError("Checkpoint num_clients does not match current config.")
+        if int(checkpoint.get("batch_size", -1)) != int(self.batch_size):
+            raise ValueError("Checkpoint batch_size does not match current config.")
+        if int(checkpoint.get("num_samples", -1)) != int(client.num_samples):
+            raise ValueError(
+                f"Client {client.client_id} sample count mismatch. "
+                "Use the same dataset, max_samples, partition config, seed, and num_clients as the crashed run."
+            )
+
+        client.personalized_model.load_state_dict(checkpoint["personalized_model_state_dict"], strict=True)
+        client.proxy_model.load_state_dict(checkpoint["proxy_model_state_dict"], strict=True)
+        client.opt_personalized.load_state_dict(checkpoint["optimizer_personalized_state_dict"])
+        client.opt_proxy.load_state_dict(checkpoint["optimizer_proxy_state_dict"])
+        self._move_optimizer_state_to_device(client.opt_personalized)
+        self._move_optimizer_state_to_device(client.opt_proxy)
+
+    def _move_optimizer_state_to_device(self, optimizer: torch.optim.Optimizer) -> None:
+        for state in optimizer.state.values():
+            for key, value in list(state.items()):
+                if torch.is_tensor(value):
+                    state[key] = value.to(self.device)
+
+    def _restore_server_proxy_from_clients(self, round_idx: int) -> None:
+        assert self.server is not None
+        proxy_states = [(copy.deepcopy(client.proxy_model.state_dict()), int(client.num_samples)) for client in self.clients]
+        aggregated = self.server.aggregation_strategy.aggregate(proxy_states)
+        self.server.global_model.load_state_dict(aggregated, strict=True)
+        self.server.last_aggregation_result = {
+            "round_idx": int(round_idx),
+            "active_clients": len(self.clients),
+            "aggregated_samples": int(sum(client.num_samples for client in self.clients)),
+            "restored_from_client_checkpoints": True,
+        }
+        self.logger.info("Reconstructed server proxy state from round %03d client checkpoints.", round_idx)
+
     def _save_split_summary(self) -> None:
         assert self.partition_pack is not None
         mode = self.config.experiment.mode
@@ -253,6 +338,8 @@ class MNASFederatedOrchestrator:
         return avg
 
     def _count_evaluation_records(self) -> int:
+        if self.metrics_recorder is not None and self.metrics_recorder.client_csv.exists():
+            return int(len(pd.read_csv(self.metrics_recorder.client_csv)))
         return len(self.round_history) * self.config.experiment.num_clients
 
 

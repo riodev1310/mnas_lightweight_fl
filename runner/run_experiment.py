@@ -17,6 +17,7 @@ def build_parser() -> argparse.ArgumentParser:
     parser.add_argument("--config", default=None, help="Path to YAML config.")
     parser.add_argument("--num-clients", type=int, choices=[10, 20, 50], default=None)
     parser.add_argument("--rounds", type=int, default=None)
+    parser.add_argument("--resume-from-round", type=int, default=None, help="Resume from completed heterogeneous client checkpoints at this round.")
     parser.add_argument("--save-every-round", type=str_to_bool, default=None)
     parser.add_argument("--eval-every-round", type=str_to_bool, default=None)
     parser.add_argument("--data-path", default=None)

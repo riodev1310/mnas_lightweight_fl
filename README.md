@@ -20,10 +20,30 @@ python -m runner.run_experiment \
   --use-mnas-search false
 ```
 
+Resume from completed client checkpoints:
+
+```bash
+python -m runner.run_experiment \
+  --num-clients 10 \
+  --rounds 100 \
+  --resume-from-round 55
+```
+
+Resume expects the same `--output-dir`, dataset, seed, partition config, and
+number of clients as the crashed run. Metrics after the resume round are pruned
+before new records are appended, so a partially written next round will not be
+duplicated.
+
 Run all scenarios:
 
 ```bash
 python -m runner.run_all --rounds 100
+```
+
+Resume all scenarios from the same completed round:
+
+```bash
+python -m runner.run_all --rounds 100 --resume-from-round 55
 ```
 
 ## Paper-Faithful Architecture Mode
